@@ -1,13 +1,28 @@
+######## Horizon Detection Using Basic Image Processing #########
+# Author: Tim Huff
+# Date: 5/24/2022
+# Description: 
+# ...
+
 import cv2
 import numpy as np
 from numpy.linalg import norm
 from math import atan2
 from draw_horizon import draw_horizon
 
-def find_horizon(frame, previous_m=None, previous_b=None, exclusion_thresh=None):
-    # initialize some None values for horizon, we will
-    # return these if no horizon can be found
-    horizon = (None, None, None, None, None, None)
+def find_horizon(frame:np.ndarray, 
+                predicted_m:float=None, predicted_b:float=None, exclusion_thresh:float=None, 
+                diagnostic_mode:bool=False) -> dict:
+    """
+    frame: the image in which you want to find the horizon
+    predicted_m: the predicted slope of the horizon based on previous frames
+    predicted_b: predicted y intercept of the horizon based on previous frames
+    exclusion_thresh: parameter that controls how close horizon points have to be
+    to predicted horizon in order to be considered valid
+    """
+    # initialize the horizon as None
+    # if no horizon can be found, return this
+    horizon = None
     # generate mask
     bgr2gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     _, mask = cv2.threshold(bgr2gray,250,255,cv2.THRESH_OTSU)
@@ -38,20 +53,21 @@ def find_horizon(frame, previous_m=None, previous_b=None, exclusion_thresh=None)
     x = x[bool_mask]
     y = y[bool_mask]
 
-    # draw the unfiltered points (diagnostic)
-    mask = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-    for n, i in enumerate(x):
-        circle_x = int(np.round(i))
-        circle_y = int(np.round(y[n]))
-        cv2.circle(mask, (circle_x, circle_y), 10, (0,0,255), 2)
-    cv2.imshow("mask", mask)
+    if diagnostic_mode:
+        # draw the unfiltered points 
+        mask = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+        for n, i in enumerate(x):
+            circle_x = int(np.round(i))
+            circle_y = int(np.round(y[n]))
+            cv2.circle(mask, (circle_x, circle_y), 10, (0,0,255), 2)
+        cv2.imshow("mask", mask)
 
     # if a previous horizon was provided, exclude any points from this
     # horizon that are too far away from the previous horizon
-    if previous_m is not None:
+    if predicted_m is not None:
         # define two points on the line from the previous horizon
-        p1 = np.array([0, previous_b])
-        p2 = np.array([frame.shape[1], previous_m * frame.shape[1] + previous_b])
+        p1 = np.array([0, predicted_b])
+        p2 = np.array([frame.shape[1], predicted_m * frame.shape[1] + predicted_b])
         p2_minus_p1 = p2 - p1
 
         # initialize some lists to contain the new (filtered) x and y values
@@ -72,14 +88,14 @@ def find_horizon(frame, previous_m=None, previous_b=None, exclusion_thresh=None)
         x = np.array(x_filtered)
         y = np.array(y_filtered)
 
-        # draw the filtered points (diagnostic)
-        for n, i in enumerate(x):
-            circle_x = int(np.round(i))
-            circle_y = int(np.round(y[n]))
-            cv2.circle(mask, (circle_x, circle_y), 10, (0,255,0), 2)
-    
-    # draw the diagnostic mask
-    cv2.imshow("mask", mask)
+        if diagnostic_mode:
+            # draw the filtered points
+            for n, i in enumerate(x):
+                circle_x = int(np.round(i))
+                circle_y = int(np.round(y[n]))
+                cv2.circle(mask, (circle_x, circle_y), 10, (0,255,0), 2)
+            # draw the diagnostic mask
+            cv2.imshow("mask", mask)
     
     if x.shape[0] < 5:
         # return None values for horizon, since too few points were found
@@ -100,45 +116,44 @@ def find_horizon(frame, previous_m=None, previous_b=None, exclusion_thresh=None)
     else:
         sky_is_up = 0
 
-    # define horizon
-    horizon = (angle, offset, sky_is_up, variance, m, b)
+    # put horizon values into a dictionary
+    horizon = {}
+    horizon['angle'] = angle
+    horizon['offset'] = offset
+    horizon['sky_is_up'] = sky_is_up
+    horizon['variance'] = variance
+    horizon['m'] = m
+    horizon['b'] = b
 
     # return the calculated values for horizon
     return horizon 
 
 if __name__ == "__main__":
-    # load the images
-    path = 'training_data/sample_images/sample_horizon_corrected.png'
-    horizon_flawless = cv2.imread(path)
+    # load the image
     path = 'training_data/sample_images/sample_horizon.png'
-    horizon_flawed = cv2.imread(path)
+    frame = cv2.imread(path)
 
     # define some variables related to cropping and scaling
     from crop_and_scale import get_cropping_and_scaling_parameters, crop_and_scale
-    DESIRED_WIDTH = 100
-    DESIRED_HEIGHT = 100
-    EXCLUSION_THRESH = horizon_flawless.shape[1] * .075
+    INFERENCE_RESOLUTION = (120, 100)
+    resolution = frame.shape[1::-1] # extract the resolution from the frame
 
     # scale the images down
-    cropping_start, cropping_end, scale_factor = get_cropping_and_scaling_parameters(horizon_flawless, DESIRED_WIDTH, DESIRED_HEIGHT)
-    horizon_flawless_small = crop_and_scale(horizon_flawless, cropping_start, cropping_end, scale_factor)
-    horizon_flawed_small = crop_and_scale(horizon_flawed, cropping_start, cropping_end, scale_factor)
+    crop_and_scale_param = get_cropping_and_scaling_parameters(resolution, INFERENCE_RESOLUTION)
+    frame_small = crop_and_scale(frame, **crop_and_scale_param)
 
-    # find the first horizon
-    angle, offset, sky_is_up, variance, m, b = find_horizon(horizon_flawless_small)
-    previous_m = m
-    previous_b = b
-    print(f'variance: {variance}')
-
-    # find the next horizon
-    angle_2, offset_2, sky_is_up_2, variance_2, m_2, b_2 = find_horizon(horizon_flawed_small, previous_m, previous_b, EXCLUSION_THRESH)
-    print(f'variance: {variance_2}')
+    # find the horizon
+    horizon = find_horizon(frame_small, diagnostic_mode=True)
+    angle = horizon['angle'] 
+    offset = horizon['offset'] 
+    sky_is_up = horizon['sky_is_up'] 
+    variance = horizon['variance'] 
+    m = horizon['m'] 
+    b = horizon['b'] 
 
     # draw the horizon
-    horizon_flawless = draw_horizon(horizon_flawless, angle, offset, sky_is_up)
-    horizon_flawed = draw_horizon(horizon_flawed, angle_2, offset_2, sky_is_up_2)
+    frame = draw_horizon(frame, angle, offset, sky_is_up, 1)
 
     # show results
-    cv2.imshow("horizon_flawless", horizon_flawless)
-    cv2.imshow("horizon_flawed", horizon_flawed)
+    cv2.imshow("frame", frame)
     cv2.waitKey(0)
