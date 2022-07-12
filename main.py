@@ -17,9 +17,8 @@ from crop_and_scale import get_cropping_and_scaling_parameters, crop_and_scale
 from find_horizon import find_horizon, get_pitch
 from draw_display import draw_horizon, draw_servos, draw_hud, draw_roi
 from text_to_speech import speaker
-from servos import get_aileron_value
+from flight_controller import get_aileron_value, get_elevator_value
 from disable_wifi_and_bluetooth import disable_wifi_and_bluetooth
-from button import CustomButton, TransmitterButton
 
 def main():
     print('----------STARTING HORIZON DETECTOR----------')
@@ -76,7 +75,7 @@ def main():
 
     # global variables
     horizon_detection = True
-    auto_pilot = False
+    autopilot = False
 
     # functions
     def determine_file_path():
@@ -166,25 +165,32 @@ def main():
     video_capture.start_stream()
     sleep(1)
     
-    # disable wifi and bluetooth on raspberry pi 
+    # perform some start-up operations specific to the Raspberry Pi
     if gv.os == "Linux":
+        # # import package for handling GPIO pins
+        # import pigpio
+        #from gpiozero import Servo
+        #from gpiozero.pins.pigpio import PiGPIOFactory
+        from switches_and_servos import TransmitterSwitch, ServoHandler
+        
+        # disable wifi and bluetooth on Raspberry Pi
         wifi_response, bluetooth_response = disable_wifi_and_bluetooth()
         speaker.add_to_queue(f'{wifi_response} {bluetooth_response}')
         
-    # create the button for starting recordings
-    recording_button = TransmitterButton()
-    recording_button.start()
-        
-    # # define servos
-    # aileron_value = 0
-    # if gv.os == "Linux":
-    #     from gpiozero import Servo
-    #     from gpiozero.pins.pigpio import PiGPIOFactory
-    #     factory = PiGPIOFactory()
-    #     servo = Servo(17, pin_factory=factory)
-    #     servo.value = 0
-    #     sleep(2)
-
+        # create TransmitterSwitch object
+        recording_switch = TransmitterSwitch(22, 2)
+        autopilot_switch = TransmitterSwitch(26, 2)
+            
+        # define aileron servo handler
+        input_pin = 4
+        output_pin = 18
+        aileron_servo_handler = ServoHandler(input_pin, output_pin)
+        # define elevator servo handler
+        input_pin = 13
+        output_pin = 12
+        elevator_servo_handler = ServoHandler(input_pin, output_pin)
+        sleep(1)
+    
     # initialize variables for main loop
     t1 = timer() # for measuring frame rate
     n = 0 # frame number
@@ -220,14 +226,22 @@ def main():
                 predicted_offset = recent_horizons[0]['offset'] + recent_horizons[0]['offset'] - recent_horizons[1]['offset']
 
         # determine servo duties
-        if auto_pilot and is_good_horizon:
+        if autopilot and is_good_horizon:
             aileron_value = get_aileron_value(horizon['angle'])
+            elevator_value = get_elevator_value(pitch)
         else:
             aileron_value = None
+            elevator_value = None
         
-        # # actuate the servos
-        # if auto_pilot and gv.os == "Linux" and aileron_value: 
-        #     servo.value = aileron_value          
+        # actuate the servos
+        if gv.os == 'Linux':
+            if not autopilot:
+                aileron_servo_handler.passthrough()
+                elevator_servo_handler.passthrough(reverse=True)
+                
+            elif autopilot and aileron_value:
+                aileron_servo_handler.actuate(aileron_value)
+                elevator_servo_handler.actuate(elevator_value)
 
         # save the horizon data for diagnostic purposes
         if horizon_detection and gv.recording:
@@ -267,13 +281,13 @@ def main():
             video_writer.queue.put(frame)
         
         # CHECK FOR INPUT
-        # Wait and check for pressed keys
         key = cv2.waitKey(1)
-
-        # Check if the button has been pressed on the Raspberry Pi
-        recording_button_has_been_pressed = recording_button.check_status()
-
-        # Evaluate which keys and buttons have been pressed
+        if gv.os == 'Linux':
+            recording_switch_new_position = recording_switch.detect_position_change()
+            autopilot_switch_new_position = autopilot_switch.detect_position_change()
+        else:
+            recording_switch_new_position = None
+            autopilot_switch_new_position = None
         if key == ord('q'):
             break
         elif key == ord('d'):
@@ -287,40 +301,46 @@ def main():
             else:
                 horizon_detection = not horizon_detection
                 speaker.add_to_queue(f'Horizon detection: {horizon_detection}')
-        elif key == ord('a'):
-            if horizon_detection:
-                auto_pilot = not auto_pilot
-                speaker.add_to_queue(f'Auto-pilot: {auto_pilot}')
-            else:
-                speaker.add_to_queue('Cannot enable autopilot without horizon detection.')
-        elif key == ord('r') or recording_button_has_been_pressed:
+        elif (key == ord('a') or autopilot_switch_new_position == 1) and not autopilot:
+            autopilot = True
+            speaker.add_to_queue(f'Auto-pilot: {autopilot}')
+        elif (key == ord('a') or autopilot_switch_new_position == 0) and autopilot:
+            autopilot = False
+            speaker.add_to_queue(f'Auto-pilot: {autopilot}')
+            if gv.os == 'Linux':
+                aileron_servo_handler.actuate(0) # return the servo to center position
+                elevator_servo_handler.actuate(0) # return the servo to center position
+        elif (key == ord('r') or recording_switch_new_position == 1) and not gv.recording:
+            # toggle the recording flag
             gv.recording = not gv.recording
-            if gv.recording:
-                # start the recording
-                # create an interator to keep track of frame numbers within the recording
-                recording_frame_iter = count()
+            
+            # start the recording
+            # create an interator to keep track of frame numbers within the recording
+            recording_frame_iter = count()
 
-                # get datetime
-                now = datetime.now()
-                dt_string = now.strftime("%m.%d.%Y.%H.%M.%S")
-                filename = f'{dt_string}.avi'
+            # get datetime
+            now = datetime.now()
+            dt_string = now.strftime("%m.%d.%Y.%H.%M.%S")
+            filename = f'{dt_string}.avi'
 
-                # start the CustomVideoWriter
-                file_path = determine_file_path()
-                video_writer = CustomVideoWriter(filename, file_path, video_capture.resolution, FPS)
-                video_writer.start_writing()
+            # start the CustomVideoWriter
+            file_path = determine_file_path()
+            video_writer = CustomVideoWriter(filename, file_path, video_capture.resolution, FPS)
+            video_writer.start_writing()
 
-                # create some dictionaries to save the diagnostic data
-                datadict = {} # top-level dictionary that contains all diagnostic data
-                metadata = {} # metadata for the recording (resolution, fps, datetime, etc.)
-                frames = {} 
-                datadict['metadata'] = metadata
-                datadict['frames'] = frames
-            else:
-                # finish the recording
-                # save diagnostic about recording
-                if horizon_detection:
-                    finish_recording()
+            # create some dictionaries to save the diagnostic data
+            datadict = {} # top-level dictionary that contains all diagnostic data
+            metadata = {} # metadata for the recording (resolution, fps, datetime, etc.)
+            frames = {} 
+            datadict['metadata'] = metadata
+            datadict['frames'] = frames
+        elif (key == ord('r') or recording_switch_new_position == 0) and gv.recording:
+            # toggle the recording flag
+            gv.recording = not gv.recording
+            
+            # finish the recording, save diagnostic about recording
+            if horizon_detection:
+                finish_recording()
 
         # DYNAMIC WAIT
         # Figure out how much longer we need to wait in order 
@@ -350,7 +370,6 @@ def main():
     cv2.destroyAllWindows()
     gv.recording = False
     gv.run = False
-    recording_button.release()
     sleep(1) 
     print('---------------------END---------------------')
 
