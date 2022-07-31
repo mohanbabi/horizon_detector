@@ -9,9 +9,6 @@ import read_PWM
 MIN_DUTY = 3.84
 MAX_DUTY = 9.76
 DUTY_RANGE = MAX_DUTY - MIN_DUTY
-CENTER_DUTY = MIN_DUTY + DUTY_RANGE / 2
-FPS = 30
-JITTER_REMOVAL_THRESH = .1
 
 def duty_to_value(duty) -> float:
     if duty < MIN_DUTY:
@@ -45,43 +42,16 @@ previous_servo_value = current_servo_value
 autopilot = False
 direction = 1
 increment = .1
-
-wait_time = 1 / FPS
-recent_movements = [0 for n in range(FPS / 2)]
-previous_duty = CENTER_DUTY
-previous_servo_value = 0
+wait_time = 1/30
 while True:
     sleep(wait_time)
     
     # read controls
-    current_duty = reader.duty_cycle()
-    duty_movement = abs(current_duty - previous_duty)
-    recent_movements.append(duty_movement)
-    del recent_movements[0]
-    previous_duty = current_duty
-    
-    average_recent_movements = np.average(recent_movents)
-    if average_recent_movements < JITTER_REMOVAL_THRESH:
-        is_moving = False
-    else:
-        is_moving = True
-           
-    if is_moving or duty_movement > JITTER_REMOVAL_THRESH:
-        current_servo_value = duty_to_value(current_duty)
-    else:
-        current_servo_value = previous_servo_value
-        
-        
-    
+    current_duty = reader.duty_cycle()   
     current_servo_value = duty_to_value(current_duty)
     # filter out small movements to avoid jitter
-    if abs(current_servo_value - previous_servo_value) / 2 < JITTER_REMOVAL_THRESH and has_moved == False:
-        current_servo_value = previous_servo_value
-        has_moved = False
-    else:
-        has_moved = True
-        
-    
+    if abs(current_servo_value - previous_servo_value) / 2 < .05:
+        current_servo_value = previous_servo_value        
       
     # process switch input
     new_switch_position = autopilot_switch.detect_position_change()

@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from math import cos, sin, radians
+from math import cos, sin, radians, pi
 from time import sleep
 
 def find_points(m, b, frame_shape) -> list:
@@ -30,6 +30,63 @@ def find_points(m, b, frame_shape) -> list:
         points_to_return.append(pt)
     return points_to_return
 
+def draw_horizon(frame: np.ndarray, angle: float, pitch: float, 
+                fov: float, color: tuple, draw_groundline: bool):
+    """
+    fov: the vertical field of view of the camera
+    """
+    # if no horizon data is provided, terminate function early
+    if angle is None:
+        return
+    
+    # take normalized angle and express it in terms of radians
+    angle = angle * 2 * pi
+
+    # determine if the sky is up or down based on the angle
+    full_rotation = 2 * pi
+    sky_is_up = (angle >= full_rotation * .75  or (angle > 0 and angle <= full_rotation * .25))
+
+    # convert to radians
+    angle_perp = angle + pi / 2
+
+    # calculate offset
+    offset = pitch / fov * frame.shape[0]
+
+    # find the point
+    x = offset * cos(angle_perp) + frame.shape[1]/2
+    y = offset * sin(angle_perp) + frame.shape[0]/2
+    x_rounded = int(np.round(x))
+    y_rounded = int(np.round(y))
+    center = (x_rounded, y_rounded)
+    cv2.circle(frame, center, 10, (0,0,255),2)
+
+    # get slope
+    run = cos(angle) 
+    rise = sin(angle)
+    if x != 0:
+        # draw the horizon
+        m = rise / run
+        b = y - m * x
+        pt1, pt2 = find_points(m, b, frame.shape)
+        cv2.line(frame, pt1, pt2, color,2)
+
+        # define the groundline
+        if draw_groundline:
+            m_groundline = -1/m
+            b_groundline = frame.shape[0]//2 - m_groundline * frame.shape[1]//2
+            # find the points to be drawn
+            p1_x = int(np.round((b_groundline - b) / (m - m_groundline)))
+            p1_y = int(np.round(m * p1_x + b))
+            p1 = (p1_x, p1_y)
+            if sky_is_up:
+                p2_y = frame.shape[0]
+                p2_x = int(np.round((p2_y - b_groundline) / m_groundline))
+            else:
+                p2_y = 0
+                p2_x = int(np.round(-1 * b_groundline / m_groundline))
+            p2 = (p2_x, p2_y)
+            # draw the ground line
+            cv2.line(frame, p1, p2, (0,191,255), 1)
 
 def main():
     canvas = np.zeros((500, 1000, 3), dtype = "uint8")
@@ -50,6 +107,7 @@ def main():
     horizon_angle = 30
     distance = 100
     distance_increment = 10
+    FOV_V = 48.8
 
     while True:
         # copy the canvas so we can draw on it

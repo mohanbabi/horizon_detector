@@ -2,6 +2,7 @@ import pigpio # http://abyz.co.uk/rpi/pigpio/python.html
 from gpiozero import Servo
 from gpiozero.pins.pigpio import PiGPIOFactory
 from time import sleep
+import numpy as np
 
 # global pi object for all TransmitterControl objects to use
 PI = pigpio.pi()
@@ -153,6 +154,14 @@ class ServoHandler(TransmitterControl):
         # define servo
         factory = PiGPIOFactory()
         self.servo = Servo(output_pin, pin_factory=factory)
+        
+        # anti-jitter filter settings
+        self.previous_actuated_value = 0 # initialize at center
+        self.recent_servo_values = [0 for n in range(int(30 / 8))]
+#         self.is_moving = False
+#         self.jitter_thresh = .3
+#         self.previous_duty = self.min_duty + self.duty_range / 2 # intialize at center duty
+#         self.recent_duty_movements = [0 for n in range(int(30 / 4))]
                 
     def duty_to_servo_value(self, duty) -> float:
         if duty < self.min_duty:
@@ -167,11 +176,48 @@ class ServoHandler(TransmitterControl):
     def actuate(self, servo_value):
         self.servo.value = servo_value
         
-    def passthrough(self, reverse=False):
+    def passthrough(self, reverse=False):       
+        # get values
         servo_duty = self.get_duty_cycle()
         servo_value = self.duty_to_servo_value(servo_duty)
+        
+        # reverse signal if necessary
         if reverse:
             servo_value = -1 * servo_value
+        
+        # anti-jitter filter 1
+        self.recent_servo_values.append(servo_value)
+        del self.recent_servo_values[0]
+        servo_value = np.average(self.recent_servo_values)
+        
+        if abs(servo_value - self.previous_actuated_value) < .1:
+            return
+        else:
+            self.previous_actuated_value = servo_value           
+            
+#         # anti-jitter filter 2
+#         duty_movement = abs(servo_duty - self.previous_duty)
+#         self.recent_duty_movements.append(duty_movement)
+#         del self.recent_duty_movements[0] 
+#         if self.is_moving:
+#             average_duty_movement = np.average(self.recent_duty_movements)
+#             self.previous_actuated_value = servo_value
+#             if average_duty_movement < self.jitter_thresh:
+#                 self.is_moving = False
+#                 
+#         # update self.previous_duty for next function call
+#         self.previous_duty = servo_duty
+#         
+#         # when not moving, filter out noise to eliminate jitter
+#         if not self.is_moving:
+#             if duty_movement < .6:
+#                 servo_value = self.previous_actuated_value
+#             else:
+#                 self.is_moving = True
+#                 self.previous_actuated_value = servo_value
+        
+            
+        # actuate servo
         self.actuate(servo_value)
                               
 # Demo

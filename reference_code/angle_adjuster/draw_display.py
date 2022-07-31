@@ -29,8 +29,7 @@ def draw_roi(frame: np.ndarray, crop_and_scale_parameters: dict) -> np.ndarray:
 
 
 def draw_hud(frame: np.ndarray, angle:float , pitch: float, 
-                is_good_horizon: bool, recording: bool = False,
-                draw_center_circle: bool = True) -> np.ndarray:
+                is_good_horizon: bool, recording: bool = False) -> np.ndarray:
     # draw angle and pitch text
     if angle and is_good_horizon:
         angle_degrees = degrees(angle * 2 * pi)
@@ -45,12 +44,11 @@ def draw_hud(frame: np.ndarray, angle:float , pitch: float,
     cv2.putText(frame, f"Pitch: {pitch}",(20,80),cv2.FONT_HERSHEY_COMPLEX_SMALL,1,color,1,cv2.LINE_AA)
 
     # draw center circle
-    if draw_center_circle:
-        x = frame.shape[1]//2
-        y = frame.shape[0]//2
-        center = (x, y)
-        radius = frame.shape[0]//72
-        cv2.circle(frame, center, radius, (255,0,0), 2)
+    x = frame.shape[1]//2
+    y = frame.shape[0]//2
+    center = (x, y)
+    radius = frame.shape[0]//72
+    cv2.circle(frame, center, radius, (255,0,0), 2)
 
     # draw recording text
     if recording:
