@@ -15,10 +15,8 @@ from math import sqrt
 from video_classes import CustomVideoCapture, CustomVideoWriter
 import global_variables as gv
 from crop_and_scale import get_cropping_and_scaling_parameters, crop_and_scale
-from find_horizon import find_horizon, get_pitch, HorizonPredicter
-from draw_display import draw_horizon, draw_servos, draw_hud, draw_roi
-from text_to_speech import speaker
-from flight_controller import get_aileron_value, get_elevator_value
+from find_horizon import HorizonDetector
+from draw_display import draw_horizon, draw_hud, draw_roi
 from disable_wifi_and_bluetooth import disable_wifi_and_bluetooth
 
 def main():
@@ -74,16 +72,12 @@ def main():
         INFERENCE_RESOLUTION = (inference_width, inference_height)
         print(f'The inference resolution has been adjusted to: {INFERENCE_RESOLUTION}')
 
-    # Field of View Constants
-    # FOV constants for Raspberry Pi Camera v2
+    # FOV constant for Raspberry Pi Camera v2
     # source: https://www.raspberrypi.com/documentation/accessories/camera.html
-    FOV_H = 62.2  
-    FOV_V = 48.8
-    INF_FOV_H = (INFERENCE_RESOLUTION[0] / INFERENCE_RESOLUTION[1]) / (RESOLUTION[0] / RESOLUTION[1]) * FOV_H
-    INF_FOV_V = FOV_V
-    INF_FOV_DIAG = sqrt(INF_FOV_H ** 2 + INF_FOV_V **2)
+    FOV = 48.8
     
     # global variables
+    actual_fps = 0
     horizon_detection = True
     autopilot = False
     if OPERATING_SYSTEM == 'Linux':
@@ -135,6 +129,7 @@ def main():
         metadata['fps'] = FPS
         metadata['exclusion_thresh'] = EXCLUSION_THRESH
         metadata['acceptable_variance'] = ACCEPTABLE_VARIANCE
+        metadata['fov'] = FOV
 
         # wait for video_writer to finish recording      
         while video_writer.run:
@@ -165,11 +160,10 @@ def main():
     # Define the exclusion threshold in terms of the height of INFERENCE_RESOLUTION.
     # EXCLUSION_THRESH is the distance from the previous horizon beyond which  
     # contour points will be filtered out.
-    EXCLUSION_THRESH = INFERENCE_RESOLUTION[0] * .1
+    EXCLUSION_THRESH = 10
 
-    # Keep track of the two most recent horizons
-    # to predict the approximate area of the current horizon.
-    horizon_predicter = HorizonPredicter()
+    # define the HorizonDetector
+    horizon_detector = HorizonDetector(EXCLUSION_THRESH, FOV, ACCEPTABLE_VARIANCE)
 
     # start VideoStreamer
     video_capture.start_stream()
@@ -181,7 +175,7 @@ def main():
         
         # disable wifi and bluetooth on Raspberry Pi
         wifi_response, bluetooth_response = disable_wifi_and_bluetooth()
-        speaker.add_to_queue(f'{wifi_response} {bluetooth_response}')
+        print(f'{wifi_response} {bluetooth_response}')
         
         # create TransmitterSwitch object
         recording_switch = TransmitterSwitch(13, 2)
@@ -212,40 +206,8 @@ def main():
             scaled_and_cropped_frame = crop_and_scale(frame, **crop_and_scale_parameters)
 
             # find the horizon
-            horizon, diagnostic_mask = find_horizon(scaled_and_cropped_frame, horizon_predicter.predicted_angle, 
-                                                    horizon_predicter.predicted_offset, 
-                                                    EXCLUSION_THRESH, diagnostic_mode=render_image)
-
-            # get the pitch
-            pitch = get_pitch(horizon['offset_new'], INF_FOV_DIAG)
-
-            # check the variance to determine if this is a good horizon
-            if horizon['variance'] and horizon['variance'] < ACCEPTABLE_VARIANCE: 
-                is_good_horizon = 1
-                horizon_predicter.predict(horizon)
-            else:
-                is_good_horizon = 0
-                horizon_predicter.predict(None)
-
-        # Flight Controller
-        if FLT_CTRL:
-        # determine servo duties
-            if autopilot and is_good_horizon:
-                aileron_value = get_aileron_value(horizon['angle'])
-                elevator_value = get_elevator_value(pitch)
-            else:
-                aileron_value = None
-                elevator_value = None
-            
-            # actuate the servos
-            if OPERATING_SYSTEM == 'Linux':
-                if not autopilot:
-                    aileron_servo_handler.passthrough()
-                    elevator_servo_handler.passthrough(reverse=True)
-                    
-                elif autopilot and aileron_value:
-                    aileron_servo_handler.actuate(aileron_value)
-                    elevator_servo_handler.actuate(elevator_value)
+            output = horizon_detector.find_horizon(scaled_and_cropped_frame, diagnostic_mode=render_image)
+            roll, pitch, variance, is_good_horizon, diagnostic_mask = output
 
         # save the horizon data for diagnostic purposes
         if horizon_detection and gv.recording:
@@ -254,18 +216,11 @@ def main():
 
             # save diagnostic data to frame_data dictionary
             frame_data = {}
-            frame_data['angle'] = horizon['angle']
-            frame_data['offset'] = horizon['offset']
-            frame_data['offset_new'] = horizon['offset_new']
+            frame_data['roll'] = roll
             frame_data['pitch'] = pitch
+            frame_data['variance'] = variance
             frame_data['is_good_horizon'] = is_good_horizon
-            frame_data['variance'] = horizon['variance']
-            frame_data['actual_fps'] = actual_fps
-            if FLT_CTRL:
-                frame_data['aileron_value'] = aileron_value
-            else:
-                frame_data['aileron_value'] = ''
-                
+            frame_data['actual_fps'] = actual_fps                
             frames[recording_frame_num] = frame_data
          
         if render_image:
@@ -273,16 +228,22 @@ def main():
             # draw roi
             draw_roi(frame_copy, crop_and_scale_parameters)
             # draw horizon
-            if horizon['angle']:
-                angle = horizon['angle']
-                offset = horizon['offset']
-                offset_new = horizon['offset_new']
-                draw_horizon(frame_copy, angle, offset, offset_new, is_good_horizon, INFERENCE_RESOLUTION)
+            if roll:
+                if is_good_horizon:
+                    color = (255,0,0)
+                else:
+                    color = (0,0,255)
+                draw_horizon(frame_copy, roll, pitch, 
+                            FOV, color, draw_groundline=is_good_horizon)
+
             # draw HUD
-            draw_hud(frame_copy, horizon['angle'], pitch, is_good_horizon, gv.recording)
-            if FLT_CTRL:
-                # draw aileron
-                draw_servos(frame_copy, aileron_value)
+            draw_hud(frame_copy, roll, pitch, actual_fps, is_good_horizon, gv.recording)
+
+            # draw center circle
+            center = (frame_copy.shape[1]//2, frame_copy.shape[0]//2)
+            radius = frame.shape[0]//100
+            cv2.circle(frame_copy, center, radius, (255,0,0), 2)
+
             # show image
             cv2.imshow("Real-time Display", frame_copy)
             cv2.imshow("Diagnostic Mask", diagnostic_mask)
@@ -290,6 +251,10 @@ def main():
         # add frame to recording queue
         if gv.recording:
             video_writer.queue.put(frame)
+
+        # # for testing
+        # if not is_good_horizon and n % 10 == 0:
+        #     cv2.imwrite(f"detection_failures/{n}.png", frame)
         
         # CHECK FOR INPUT
         key = cv2.waitKey(1)
@@ -308,22 +273,19 @@ def main():
             cv2.destroyAllWindows()
             cv2.imshow("Real-time Display", paused_frame)
             render_image = not render_image
-            speaker.add_to_queue(f'Real-time display: {render_image}')
+            print(f'Real-time display: {render_image}')
         elif key == ord('h'):
             if gv.recording:
-                speaker.add_to_queue('Cannot toggle horizon detection while recording.')
+                print('Cannot toggle horizon detection while recording.')
             else:
                 horizon_detection = not horizon_detection
-                speaker.add_to_queue(f'Horizon detection: {horizon_detection}')
+                print(f'Horizon detection: {horizon_detection}')
         elif (key == ord('a') or autopilot_switch_new_position == 1) and not autopilot:
             autopilot = True
-            speaker.add_to_queue(f'Auto-pilot: {autopilot}')
+            print(f'Auto-pilot: {autopilot}')
         elif (key == ord('a') or autopilot_switch_new_position == 0) and autopilot:
             autopilot = False
-            speaker.add_to_queue(f'Auto-pilot: {autopilot}')
-            if OPERATING_SYSTEM == 'Linux':
-                aileron_servo_handler.actuate(0) # return the servo to center position
-                elevator_servo_handler.actuate(0) # return the servo to center position
+            print(f'Auto-pilot: {autopilot}')
         elif (key == ord('r') or recording_switch_new_position == 1) and not gv.recording:
             # toggle the recording flag
             gv.recording = not gv.recording
@@ -380,7 +342,6 @@ def main():
         gv.recording = not gv.recording
         finish_recording()
     video_capture.release()
-    speaker.release()
     cv2.destroyAllWindows()
     gv.recording = False
     gv.run = False
