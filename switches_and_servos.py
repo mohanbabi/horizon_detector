@@ -12,7 +12,6 @@ class TransmitterControl:
         """
         Instantiate with input_pin of the PWM signal
         to monitor.
-
         Optionally a weighting may be specified.  This is a number
         between 0 and 1 and indicates how much the old reading
         affects the new reading.  It defaults to 0 which means
@@ -158,10 +157,7 @@ class ServoHandler(TransmitterControl):
         # anti-jitter filter settings
         self.previous_actuated_value = 0 # initialize at center
         self.recent_servo_values = [0 for n in range(int(30 / 8))]
-#         self.is_moving = False
-#         self.jitter_thresh = .3
-#         self.previous_duty = self.min_duty + self.duty_range / 2 # intialize at center duty
-#         self.recent_duty_movements = [0 for n in range(int(30 / 4))]
+
                 
     def duty_to_servo_value(self, duty) -> float:
         if duty < self.min_duty:
@@ -175,6 +171,11 @@ class ServoHandler(TransmitterControl):
     
     def actuate(self, servo_value):
         self.servo.value = servo_value
+        
+    def read(self):       
+        servo_duty = self.get_duty_cycle()
+        servo_value = self.duty_to_servo_value(servo_duty)
+        return servo_value                 
         
     def passthrough(self, reverse=False):       
         # get values
@@ -288,11 +289,3 @@ if __name__ == '__main__':
     print('Demo finished.')
     print(f'min_pwm: {min_pwm}')
     print(f'max_pwm: {max_pwm}')
-
-
-        
-        
-        
-        
-        
-        

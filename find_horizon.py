@@ -6,12 +6,11 @@ import skimage.measure
 import platform
 import numpy as np
 from numpy.linalg import norm
-from math import atan2, cos, sin, pi, sqrt
+from math import atan2, cos, sin, pi, degrees, radians
 from draw_display import draw_horizon
-import global_variables as gv
 
 # constants
-FULL_ROTATION = 2 * pi
+FULL_ROTATION = 360
 OPERATING_SYSTEM = platform.system()
 POOLING_KERNEL_SIZE = 5
 
@@ -90,19 +89,19 @@ class HorizonDetector:
         # define some values for checking distance to previous horizon
         if self.predicted_roll is not None:
             # convert predicted_roll to radians
-            self.predicted_roll = self.predicted_roll * 2 * pi
+            predicted_roll_radians = radians(self.predicted_roll)
 
             # find the distance 
             distance = self.predicted_pitch / self.fov * frame.shape[0]
 
             # define the line perpendicular to horizon
-            angle_perp = self.predicted_roll + pi / 2
+            angle_perp = predicted_roll_radians + pi / 2
             x_perp = distance * cos(angle_perp) + frame.shape[1]/2
             y_perp = distance * sin(angle_perp) + frame.shape[0]/2
 
             # convert from roll and pitch of predicted horizon to m and b
-            run = cos(self.predicted_roll)
-            rise = sin(self.predicted_roll) 
+            run = cos(predicted_roll_radians)
+            rise = sin(predicted_roll_radians) 
             if run != 0:
                 predicted_m = rise / run
                 predicted_b = y_perp - predicted_m * x_perp            
@@ -166,8 +165,6 @@ class HorizonDetector:
                 cv2.circle(mask, (circle_x, circle_y), 5, (0,255,0), -1)
             # draw the predicted horizon, if there is one
             if self.predicted_roll:
-                # normalize the roll
-                self.predicted_roll = self.predicted_roll / (2 * pi)
                 draw_horizon(mask, self.predicted_roll, self.predicted_pitch, self.fov, (0,150,255),  False)
 
             # for testing
@@ -183,6 +180,7 @@ class HorizonDetector:
         # polyfit
         m, b = np.polyfit(x_filtered, y_filtered, 1)
         roll = atan2(m,1)
+        roll = degrees(roll)
 
         # determine the direction of the sky (above or below)
         if m * avg_x + b > avg_y:
@@ -224,11 +222,8 @@ class HorizonDetector:
             distance_list.append(distance)
         variance = np.average(distance_list) / frame.shape[0] * 100
         
-        # adjust the roll within the range of 0-2*pi
+        # adjust the roll within the range of 0 - 360 degrees
         roll = self._adjust_roll(roll, sky_is_up) 
-
-        # normalize the roll
-        roll = roll / (2 * pi)
 
         # determine if the horizon is acceptable
         if variance < self.acceptable_variance: 
@@ -252,10 +247,10 @@ class HorizonDetector:
         
         if sky_is_up == in_sky_is_up_sector:
             return roll
-        if roll < pi:
-            roll += pi
+        if roll < FULL_ROTATION / 2:
+            roll += FULL_ROTATION / 2
         else:
-            roll -= pi
+            roll -= FULL_ROTATION / 2
         return roll
 
     def _predict_next_horizon(self, current_roll=None, current_pitch=None, is_good_horizon=None):
@@ -329,6 +324,7 @@ if __name__ == "__main__":
     roll, pitch, variance, is_good_horizon, mask = output
     color = (255,0,0)
     draw_horizon(frame, roll, pitch, FOV, color, True)
+    print(f'Calculated roll: {roll}')
     print(f'Calculated pitch: {pitch}')
 
     # draw center circle

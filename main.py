@@ -178,7 +178,7 @@ def main():
         print(f'{wifi_response} {bluetooth_response}')
         
         # create TransmitterSwitch object
-        recording_switch = TransmitterSwitch(13, 2)
+        recording_switch = TransmitterSwitch(26, 2)
         
         if FLT_CTRL:
             print('Initializing flight controller.')

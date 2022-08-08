@@ -3,9 +3,9 @@ from sys import base_prefix
 from tkinter.tix import MAX
 import cv2
 import numpy as np
-from math import cos, sin, pi, degrees, sqrt
+from math import cos, sin, pi, radians
 
-FULL_ROTATION = 2 * pi
+FULL_ROTATION = 360
 
 def _find_points(m: float, b: float, frame_shape: tuple) -> list:
     """"
@@ -71,17 +71,16 @@ def draw_hud(frame: np.ndarray, roll: float , pitch: float, fps: float,
                 is_good_horizon: bool, recording: bool = False) -> np.ndarray:
     # draw roll and pitch text
     if roll and is_good_horizon:
-        roll_degrees = degrees(roll * 2 * pi)
-        roll_degrees = int(np.round(roll_degrees))
+        roll = int(np.round(roll))
         pitch = int(np.round(pitch))
         color = (255, 0, 0)
     else:
-        roll_degrees = ''
+        roll = ''
         pitch = ''
         color = (0,0,255)
     # round fps
     fps = np.round(fps, decimals=2)
-    cv2.putText(frame, f"Roll: {roll_degrees}",(20,40),cv2.FONT_HERSHEY_COMPLEX_SMALL,1,color,1,cv2.LINE_AA)
+    cv2.putText(frame, f"Roll: {roll}",(20,40),cv2.FONT_HERSHEY_COMPLEX_SMALL,1,color,1,cv2.LINE_AA)
     cv2.putText(frame, f"Pitch: {pitch}",(20,80),cv2.FONT_HERSHEY_COMPLEX_SMALL,1,color,1,cv2.LINE_AA)
     cv2.putText(frame, f"FPS: {fps}",(20,120),cv2.FONT_HERSHEY_COMPLEX_SMALL,1,(255,0,0),1,cv2.LINE_AA)
 
@@ -101,7 +100,7 @@ def draw_horizon(frame: np.ndarray, roll: float , pitch: float,
         return
 
     # take normalized roll and express it in terms of radians
-    roll = roll * 2 * pi
+    roll = radians(roll)
     
     # determine if the sky is up or down based on the roll
     sky_is_up = (roll >= FULL_ROTATION * .75  or (roll > 0 and roll <= FULL_ROTATION * .25))
