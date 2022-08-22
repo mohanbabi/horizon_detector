@@ -163,6 +163,8 @@ class ServoHandler(TransmitterControl):
         if recent_servo_readings_list_len > 1:
             self.smoothing = True            
             self.recent_servo_readings = [0 for n in range(recent_servo_readings_list_len)]
+        else:
+            self.smoothing = False
             
         # anti-jitter increments
         if increments:
@@ -171,6 +173,8 @@ class ServoHandler(TransmitterControl):
             full_range = 2
             self.increment_length = full_range / increments
             self.previous_actuated_value = 0 # initialize at center
+        else:
+            self.incremental_movement = False
 
                 
     def duty_to_servo_value(self, duty) -> float:
@@ -202,7 +206,7 @@ class ServoHandler(TransmitterControl):
         if self.smoothing:
             self.recent_servo_readings.append(servo_value)
             del self.recent_servo_readings[0]
-        servo_value = np.average(self.recent_servo_readings)
+            servo_value = np.average(self.recent_servo_readings)
         
         return servo_value                 
         

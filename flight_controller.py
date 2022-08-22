@@ -62,6 +62,8 @@ class FlightController:
         self.roll = 0
         self.pitch = 0
         self.is_good_horizon = 0
+        self.ail_val = 0
+        self.elev_val = 0
 
     def run(self, roll, pitch, is_good_horizon):
         """
@@ -79,7 +81,7 @@ class FlightController:
             self.roll = self.convert_roll(roll)
             self.pitch = pitch
             self.is_good_horizon = is_good_horizon
-        # If the horizon is not detetectd, and has not been detected for
+        # If the horizon is not detetected, and has not been detected for
         # some time, reset roll, pitch and is_good_horizon to 0.
         elif not any(self.horizon_detection_list):
             self.roll = 0
@@ -223,11 +225,17 @@ class LevelFlight(FlightProgram):
     
     def run(self):
         if self.flt_ctrl.is_good_horizon:
-            # update some values
+            # If the horizon is good, run the pid controller and accept the returned values.
             self.flt_ctrl.ail_val = self.ail_pid(self.flt_ctrl.roll)
             self.flt_ctrl.elev_val = self.elev_pid(self.flt_ctrl.pitch)
-
-        elif not any(self.flt_ctrl.horizon_detection_list):
+        else:
+            # If the horizon is not good, run the PID controller with the previous roll and pitch values.
+            # Do not accept the output of the PID controller.
+            # The previous ail_val and elev_val will be maintained in this case.
+            _ = self.ail_pid(self.flt_ctrl.roll)
+            _ = self.elev_pid(self.flt_ctrl.pitch)
+            
+        if not any(self.flt_ctrl.horizon_detection_list):
             # return to neutral position after a period of time
             self.flt_ctrl.ail_val = 0 
             self.flt_ctrl.elev_val = 0
@@ -248,8 +256,8 @@ def main():
         from switches_and_servos import ServoHandler, TransmitterSwitch
         
         # servo handlers
-        ail_handler = ServoHandler(13, 12, FPS, .1, 30)
-        elev_handler = ServoHandler(18, 27, FPS, .1, 30)
+        ail_handler = ServoHandler(13, 12, FPS)
+        elev_handler = ServoHandler(18, 27, FPS)
         
         # switches
         recording_switch = TransmitterSwitch(26, 2)
@@ -283,12 +291,12 @@ def main():
 
         # Simulation: update roll and pitch
         wind.run()
-        roll += 3 * ail_val
+        roll += 5 * ail_val + wind.speed
         if roll >= FULL_ROTATION:
             roll -= FULL_ROTATION
         elif roll < 0:
             roll += FULL_ROTATION
-        pitch += elev_val + wind.speed
+        pitch += 3 * elev_val + wind.speed
         
         if abs(pitch) > FOV:
             roll = .01
