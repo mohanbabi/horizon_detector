@@ -30,7 +30,7 @@ class Wind:
         self.randomize()
         
     def randomize(self):
-        self.seconds_until_next_change = random.randint(1,25)
+        self.seconds_until_next_change = random.randint(1,5)
         self.speed = random.uniform(-1 * self.speed_range, self.speed_range)
         print(SEPARATOR)
         print(f'Wind speed changing to {self.speed}.')
@@ -64,6 +64,14 @@ class FlightController:
         self.is_good_horizon = 0
         self.ail_val = 0
         self.elev_val = 0
+        
+        # Initialize PID parameters
+        self.ail_kp = .3
+        self.ail_ki = 0
+        self.ail_kd = 0
+        self.elev_kp = .3
+        self.elev_ki = 0
+        self.elev_kd = 0
 
     def run(self, roll, pitch, is_good_horizon):
         """
@@ -109,7 +117,7 @@ class FlightController:
                abs(self.elev_stick_value) > self.INTERRUPT_THRESH:
                 print(SEPARATOR)
                 print('User input detected.')
-                print(f'Elevator stick value: {self.elev_stick_value} Aileron stick value: {self.ail_stick_value}| ')
+                print(f'Elevator stick value: {self.elev_stick_value} Aileron stick value: {self.ail_stick_value}')
                 print('Terminating program')
                 # return to manual control
                 self.select_program(0)
@@ -130,7 +138,31 @@ class FlightController:
         if roll > FULL_ROTATION / 2:
             roll -= FULL_ROTATION
         return roll
-
+    
+    def update_pid_params(self, pid_ctrlr, pid_param, increment):
+        # Update the PID values of the Flight Controller.
+        if pid_ctrlr == 'ail':
+            if pid_param == 'p':
+                self.ail_kp += increment
+            elif pid_param == 'i':
+                self.ail_ki += increment
+            elif pid_param == 'd':
+                self.ail_kd += increment
+        elif pid_ctrlr == 'elev':
+            if pid_param == 'p':
+                self.elev_kp += increment
+            elif pid_param == 'i':
+                self.elev_ki += increment
+            elif pid_param == 'd':
+                self.elev_kd += increment
+        
+        # If the Flight Controller is on autopilot, push the new PID values down to the Flight Program.
+        if self.program_id == 2:
+            if pid_ctrlr == 'ail':
+                self.program.ail_pid.tunings = (self.ail_kp, self.ail_ki, self.ail_kd)
+            elif pid_ctrlr == 'elev':
+                self.program.elev_pid.tunings = (self.elev_kp, self.elev_ki, self.elev_kd)
+                         
 class FlightProgram:
     def __init__(self, flt_ctrl):
         """
@@ -212,22 +244,26 @@ class LevelFlight(FlightProgram):
         super().__init__(flt_ctrl)
 
         # PID controllers
-        # default: 1, .1, .05
-        # works well: .8, .1, .02
-        # aileron
-        self.ail_pid = PID(.1, .2, .01, setpoint=0) 
-        self.ail_pid.output_limits = (-.5, .5)
+        # aileron PID controller
+        p = self.flt_ctrl.ail_kp
+        i = self.flt_ctrl.ail_ki
+        d = self.flt_ctrl.ail_kd
+        self.ail_pid = PID(p, i, d, setpoint=0) 
+        self.ail_pid.output_limits = (-.3, .3)
         self.ail_pid.sample_time = 1 / self.flt_ctrl.fps
-        # elevator
-        self.elev_pid = PID(.6, .2, .02, setpoint=0) 
+        # elevator  PID controller
+        p = self.flt_ctrl.elev_kp
+        i = self.flt_ctrl.elev_ki
+        d = self.flt_ctrl.elev_kd
+        self.elev_pid = PID(p, i, d, setpoint=0) 
         self.elev_pid.sample_time = 1 / self.flt_ctrl.fps 
-        self.elev_pid.output_limits = (-.5, .5)
+        self.elev_pid.output_limits = (-.3, .3)
     
     def run(self):
         if self.flt_ctrl.is_good_horizon:
             # If the horizon is good, run the pid controller and accept the returned values.
-            self.flt_ctrl.ail_val = self.ail_pid(self.flt_ctrl.roll)
-            self.flt_ctrl.elev_val = self.elev_pid(self.flt_ctrl.pitch)
+            self.flt_ctrl.ail_val = self.ail_pid(self.flt_ctrl.roll - 20 * self.flt_ctrl.ail_stick_value)
+            self.flt_ctrl.elev_val = self.elev_pid(self.flt_ctrl.pitch - 10 * self.flt_ctrl.elev_stick_value)
         else:
             # If the horizon is not good, run the PID controller with the previous roll and pitch values.
             # Do not accept the output of the PID controller.
@@ -250,19 +286,21 @@ def main():
     FPS = 30
     WAIT_TIME = int(np.round(1 / FPS * 1000))
     FOV = 48.8
+    OFF_WHITE = (200,200,200)
+    GREEN = (10, 230, 10)
 
-    wind = Wind(.2)
+    ail_wind = Wind(.5)
+    elev_wind = Wind(.5)
     if OPERATING_SYSTEM == 'Linux':
         from switches_and_servos import ServoHandler, TransmitterSwitch
         
         # servo handlers
-        ail_handler = ServoHandler(13, 12, FPS)
-        elev_handler = ServoHandler(18, 27, FPS)
+        ail_handler = ServoHandler(13, 12, FPS, .15, 40)
+        elev_handler = ServoHandler(18, 27, FPS, .15, 40)
         
         # switches
         recording_switch = TransmitterSwitch(26, 2)
-        autopilot_switch = TransmitterSwitch(6, 2)
-        
+        autopilot_switch = TransmitterSwitch(6, 2)     
         
     else:
         ail_handler = ServoHandlerSimulator()
@@ -276,6 +314,10 @@ def main():
     elev_val = 0
     roll = .0001
     pitch = 0
+    
+    # Initialize some variables for PID tuning
+    selected_pid_ctrlr = 'ail'
+    selected_pid_param = 'p'
 
     is_good_horizon = True
     draw_ground_line = True
@@ -290,13 +332,14 @@ def main():
         elev_stick_value = 0
 
         # Simulation: update roll and pitch
-        wind.run()
-        roll += 5 * ail_val + wind.speed
+        ail_wind.run()
+        elev_wind.run()
+        roll += 5 * ail_val + ail_wind.speed
         if roll >= FULL_ROTATION:
             roll -= FULL_ROTATION
         elif roll < 0:
             roll += FULL_ROTATION
-        pitch += 3 * elev_val + wind.speed
+        pitch += 3 * elev_val + elev_wind.speed
         
         if abs(pitch) > FOV:
             roll = .01
@@ -328,7 +371,55 @@ def main():
 
         # FlightProgram type
         program_name = flt_ctrl.program.__class__.__name__
-        cv2.putText(canvas_copy, program_name, (20,40),cv2.FONT_HERSHEY_COMPLEX_SMALL,1,(200,200,200),1,cv2.LINE_AA)
+        cv2.putText(canvas_copy, program_name, (20,30),cv2.FONT_HERSHEY_COMPLEX_SMALL,.75,(200,200,200),1,cv2.LINE_AA)
+        
+        # ail_kp
+        text = f'Ail P: {np.round(flt_ctrl.ail_kp, decimals=3)}'
+        if selected_pid_ctrlr == 'ail' and selected_pid_param == 'p':
+            color = GREEN
+        else:
+            color = OFF_WHITE        
+        cv2.putText(canvas_copy, text, (20,60),cv2.FONT_HERSHEY_COMPLEX_SMALL,.75,color,1,cv2.LINE_AA)
+        
+        # ail_ki
+        text = f'Ail I: {np.round(flt_ctrl.ail_ki, decimals=3)}'
+        if selected_pid_ctrlr == 'ail' and selected_pid_param == 'i':
+            color = GREEN
+        else:
+            color = OFF_WHITE        
+        cv2.putText(canvas_copy, text, (20,90),cv2.FONT_HERSHEY_COMPLEX_SMALL,.75,color,1,cv2.LINE_AA)
+        
+        # ail_kd
+        text = f'Ail D: {np.round(flt_ctrl.ail_kd, decimals=3)}'
+        if selected_pid_ctrlr == 'ail' and selected_pid_param == 'd':
+            color = GREEN
+        else:
+            color = OFF_WHITE        
+        cv2.putText(canvas_copy, text, (20,120),cv2.FONT_HERSHEY_COMPLEX_SMALL,.75,color,1,cv2.LINE_AA)
+        
+        # elev_kp
+        text = f'Ele P: {np.round(flt_ctrl.elev_kp, decimals=3)}'
+        if selected_pid_ctrlr == 'elev' and selected_pid_param == 'p':
+            color = GREEN
+        else:
+            color = OFF_WHITE        
+        cv2.putText(canvas_copy, text, (20,150),cv2.FONT_HERSHEY_COMPLEX_SMALL,.75,color,1,cv2.LINE_AA)
+        
+        # elev_ki
+        text = f'Ele I: {np.round(flt_ctrl.elev_ki, decimals=3)}'
+        if selected_pid_ctrlr == 'elev' and selected_pid_param == 'i':
+            color = GREEN
+        else:
+            color = OFF_WHITE        
+        cv2.putText(canvas_copy, text, (20,180),cv2.FONT_HERSHEY_COMPLEX_SMALL,.75,color,1,cv2.LINE_AA)
+        
+        # elev_kd
+        text = f'Ele D: {np.round(flt_ctrl.elev_kd, decimals=3)}'
+        if selected_pid_ctrlr == 'elev' and selected_pid_param == 'd':
+            color = GREEN
+        else:
+            color = OFF_WHITE        
+        cv2.putText(canvas_copy, text, (20,210),cv2.FONT_HERSHEY_COMPLEX_SMALL,.75,color,1,cv2.LINE_AA)
 
         # show some results
         cv2.imshow("Flight Controller", canvas_copy)
@@ -358,6 +449,23 @@ def main():
             pitch = 0
         elif key == ord('1'):
             flt_ctrl.select_program(1)
+        # PID selection
+        elif key == ord('5'):
+            selected_pid_ctrlr = 'ail'
+        elif key == ord('6'):
+            selected_pid_ctrlr = 'elev'
+        elif key == ord('7'):
+            selected_pid_param = 'p'
+        elif key == ord('8'):
+            selected_pid_param = 'i'
+        elif key == ord('9'):
+            selected_pid_param = 'd'
+        elif key == ord('-'):
+            flt_ctrl.update_pid_params(selected_pid_ctrlr, selected_pid_param, -.005)
+            print(f'Decreasing {selected_pid_param} for {selected_pid_ctrlr}.')
+        elif key == ord('='):
+            flt_ctrl.update_pid_params(selected_pid_ctrlr, selected_pid_param, .005)
+            print(f'Increasing {selected_pid_param} for {selected_pid_ctrlr}.')
         # surface check
         elif (key == ord('1') or recording_switch_new_position == 1) and flt_ctrl.program_id != 1:
             flt_ctrl.select_program(1)

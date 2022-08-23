@@ -92,8 +92,8 @@ class TransmitterSwitch(TransmitterControl):
         self.positions = positions
         
         # determine the thresholds for the button positions
-        pwm_min = 988
-        pwm_max = 2010
+        pwm_min = 860 # originally 988 for 2 positions switches
+        pwm_max = 2140 # originally 2010 for 2 positions switches
         increment = (pwm_max - pwm_min) / self.positions
         thresh = pwm_min
         self.position_thresholds = []
