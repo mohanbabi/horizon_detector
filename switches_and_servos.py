@@ -150,8 +150,8 @@ class ServoHandler(TransmitterControl):
         """
         super().__init__(input_pin, weighting=0.0)
         
-        self.min_duty = 3.84
-        self.max_duty = 9.76
+        self.min_duty = 7.3 # 3.84
+        self.max_duty = 12.9 # 9.76
         self.duty_range = self.max_duty - self.min_duty
         
         # define servo
@@ -167,12 +167,12 @@ class ServoHandler(TransmitterControl):
             self.smoothing = False
             
         # anti-jitter increments
+        self.previous_actuated_value = 0 # initialize at center
         if increments:
             self.incremental_movement = True
             # 2 is the full range of servo movement (-1 to 1)
             full_range = 2
             self.increment_length = full_range / increments
-            self.previous_actuated_value = 0 # initialize at center
         else:
             self.incremental_movement = False
 
@@ -185,22 +185,27 @@ class ServoHandler(TransmitterControl):
         else:
             servo_value = (duty - self.min_duty) / self.duty_range
             servo_value = (servo_value - .5) * 2
+        
         return servo_value
     
     def actuate(self, servo_value):
         # optional anti-jitter filter
         if self.incremental_movement:
             if abs(servo_value - self.previous_actuated_value) < self.increment_length:
-                return
+                return self.previous_actuated_value
             else:
                 self.previous_actuated_value = servo_value
                 
         # actuate servo
         self.servo.value = servo_value
         
+        # return the value that was actually actuated
+        return servo_value
+        
     def read(self):       
         servo_duty = self.get_duty_cycle()
         servo_value = self.duty_to_servo_value(servo_duty)
+        # print(f'{servo_duty} | {servo_value}')
         
         # optional smoothing
         if self.smoothing:
@@ -209,50 +214,6 @@ class ServoHandler(TransmitterControl):
             servo_value = np.average(self.recent_servo_readings)
         
         return servo_value                 
-        
-#     def passthrough(self, reverse=False):       
-#         # get values
-#         servo_duty = self.get_duty_cycle()
-#         servo_value = self.duty_to_servo_value(servo_duty)
-#         
-#         # reverse signal if necessary
-#         if reverse:
-#             servo_value = -1 * servo_value
-#         
-#         # anti-jitter filter 1
-#         self.recent_servo_values.append(servo_value)
-#         del self.recent_servo_values[0]
-#         servo_value = np.average(self.recent_servo_values)
-#         
-#         if abs(servo_value - self.previous_actuated_value) < .1:
-#             return
-#         else:
-#             self.previous_actuated_value = servo_value           
-            
-#         # anti-jitter filter 2
-#         duty_movement = abs(servo_duty - self.previous_duty)
-#         self.recent_duty_movements.append(duty_movement)
-#         del self.recent_duty_movements[0] 
-#         if self.is_moving:
-#             average_duty_movement = np.average(self.recent_duty_movements)
-#             self.previous_actuated_value = servo_value
-#             if average_duty_movement < self.jitter_thresh:
-#                 self.is_moving = False
-#                 
-#         # update self.previous_duty for next function call
-#         self.previous_duty = servo_duty
-#         
-#         # when not moving, filter out noise to eliminate jitter
-#         if not self.is_moving:
-#             if duty_movement < .6:
-#                 servo_value = self.previous_actuated_value
-#             else:
-#                 self.is_moving = True
-#                 self.previous_actuated_value = servo_value
-        
-            
-#         # actuate servo
-#         self.actuate(servo_value)
                               
 # Demo
 if __name__ == '__main__':

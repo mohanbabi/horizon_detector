@@ -1,4 +1,5 @@
 # libraries
+import os
 import numpy as np
 from simple_pid import PID
 import random
@@ -48,7 +49,7 @@ class FlightController:
         self.fps = fps
 
         # constants
-        self.INTERRUPTABLE_PROGRAMS = [1]
+        self.INTERRUPTABLE_PROGRAMS = [1, 3]
         self.INTERRUPT_THRESH = .2
 
         # set the default flight program
@@ -58,6 +59,9 @@ class FlightController:
         n = 1 # seconds
         self.horizon_detection_list = [0 for n in range(n * fps)]
         
+        self.ail_val = 0
+        self.elev_val = 0
+        
         # initialize some values
         self.roll = 0
         self.pitch = 0
@@ -66,10 +70,10 @@ class FlightController:
         self.elev_val = 0
         
         # Initialize PID parameters
-        self.ail_kp = .3
+        self.ail_kp = -.01
         self.ail_ki = 0
         self.ail_kd = 0
-        self.elev_kp = .3
+        self.elev_kp = -.025
         self.elev_ki = 0
         self.elev_kd = 0
 
@@ -101,8 +105,8 @@ class FlightController:
             self.is_good_horizon = is_good_horizon
 
         # read stick values
-        self.ail_stick_value = self.ail_handler.read()
-        self.elev_stick_value = self.elev_handler.read()
+        self.ail_stick_val = self.ail_handler.read()
+        self.elev_stick_val = self.elev_handler.read()
 
         # run the flight program
         stop = self.program.run()
@@ -113,20 +117,20 @@ class FlightController:
         
         # check for user interruption
         if self.program_id in self.INTERRUPTABLE_PROGRAMS:                
-            if abs(self.ail_stick_value) > self.INTERRUPT_THRESH or \
-               abs(self.elev_stick_value) > self.INTERRUPT_THRESH:
+            if abs(self.ail_stick_val) > self.INTERRUPT_THRESH or \
+               abs(self.elev_stick_val) > self.INTERRUPT_THRESH:
                 print(SEPARATOR)
                 print('User input detected.')
-                print(f'Elevator stick value: {self.elev_stick_value} Aileron stick value: {self.ail_stick_value}')
+                print(f'Elevator stick value: {self.elev_stick_val} Aileron stick value: {self.ail_stick_val}')
                 print('Terminating program')
                 # return to manual control
                 self.select_program(0)
 
         # actuate the servos
-        self.ail_handler.actuate(self.ail_val)
-        self.elev_handler.actuate(self.elev_val)
+        self.ail_val = self.ail_handler.actuate(self.ail_val)
+        self.elev_val = self.elev_handler.actuate(self.elev_val)
 
-        return self.ail_val, self.elev_val
+        return self.ail_stick_val, self.elev_stick_val, self.ail_val, self.elev_val
 
     def select_program(self, program_id):
         self.program = FlightProgram.__subclasses__()[program_id](self)
@@ -139,7 +143,7 @@ class FlightController:
             roll -= FULL_ROTATION
         return roll
     
-    def update_pid_params(self, pid_ctrlr, pid_param, increment):
+    def update_pid_params(self, pid_ctrlr: str, pid_param: str, increment: float):
         # Update the PID values of the Flight Controller.
         if pid_ctrlr == 'ail':
             if pid_param == 'p':
@@ -181,10 +185,10 @@ class ManualFlight(FlightProgram):
     
     def run(self):
         # aileron 
-        self.flt_ctrl.ail_val = self.flt_ctrl.ail_stick_value
+        self.flt_ctrl.ail_val = self.flt_ctrl.ail_stick_val
 
-        # aileron 
-        self.flt_ctrl.elev_val = self.flt_ctrl.elev_stick_value
+        # elevator 
+        self.flt_ctrl.elev_val = self.flt_ctrl.elev_stick_val
 
         return False
 
@@ -203,7 +207,7 @@ class SurfaceCheck(FlightProgram):
 
         # some values for moving the servos
         self.direction = 1
-        self.increment = 1 / self.flt_ctrl.fps * 5
+        self.increment = 1 / self.flt_ctrl.fps * 6
         self.ail_iterations = 0
         self.elev_iterations = 0
 
@@ -262,8 +266,8 @@ class LevelFlight(FlightProgram):
     def run(self):
         if self.flt_ctrl.is_good_horizon:
             # If the horizon is good, run the pid controller and accept the returned values.
-            self.flt_ctrl.ail_val = self.ail_pid(self.flt_ctrl.roll - 20 * self.flt_ctrl.ail_stick_value)
-            self.flt_ctrl.elev_val = self.elev_pid(self.flt_ctrl.pitch - 10 * self.flt_ctrl.elev_stick_value)
+            self.flt_ctrl.ail_val = self.ail_pid(self.flt_ctrl.roll + 20 * self.flt_ctrl.ail_stick_val)
+            self.flt_ctrl.elev_val = self.elev_pid(self.flt_ctrl.pitch + 10 * self.flt_ctrl.elev_stick_val)
         else:
             # If the horizon is not good, run the PID controller with the previous roll and pitch values.
             # Do not accept the output of the PID controller.
@@ -276,6 +280,32 @@ class LevelFlight(FlightProgram):
             self.flt_ctrl.ail_val = 0 
             self.flt_ctrl.elev_val = 0
         return False
+    
+class QuickWiggle(FlightProgram):
+    def __init__(self, flt_ctrl):
+        """
+        Automatic surface check for preflight check.
+        """
+        super().__init__(flt_ctrl)
+       
+        self.stop = False
+        self.servo_value = .01
+        self.direction = 1
+        self.increment = 1 / self.flt_ctrl.fps * 5
+        
+
+    def run(self):
+        if self.servo_value + self.increment * self.direction > 1:
+            self.direction *= -1
+        elif self.servo_value + self.increment * self.direction < 0:
+            self.stop = True
+        
+        self.servo_value += self.increment * self.direction
+        
+        # update both the aileron and elevator value of the flight controller
+        self.flt_ctrl.ail_val, self.flt_ctrl.elev_val = self.servo_value, self.servo_value
+
+        return self.stop
 
 def main():
     import cv2
@@ -328,8 +358,8 @@ def main():
         canvas_copy = canvas.copy()
 
         # initialize some values
-        ail_stick_value = 0
-        elev_stick_value = 0
+        ail_stick_val = 0
+        elev_stick_val = 0
 
         # Simulation: update roll and pitch
         ail_wind.run()
@@ -346,7 +376,7 @@ def main():
             pitch = 0
 
         # run flight controller
-        ail_val, elev_val = flt_ctrl.run(roll, pitch, is_good_horizon)
+        ail_stick_val, elev_stick_val, ail_val, elev_val = flt_ctrl.run(roll, pitch, is_good_horizon)
 
         # draw
         if is_good_horizon:
@@ -438,13 +468,13 @@ def main():
         if key == ord('q'):
             break
         elif key == ord('a'):
-            ail_stick_value = -.5
+            ail_stick_val = -.5
         elif key == ord('d'):
-            ail_stick_value = .5
+            ail_stick_val = .5
         elif key == ord('w'):
-            elev_stick_value = .5
+            elev_stick_val = .5
         elif key == ord('s'):
-            elev_stick_value = -.5
+            elev_stick_val = -.5
         elif key == ord('r'):
             pitch = 0
         elif key == ord('1'):
@@ -469,8 +499,8 @@ def main():
         # surface check
         elif (key == ord('1') or recording_switch_new_position == 1) and flt_ctrl.program_id != 1:
             flt_ctrl.select_program(1)
-        elif (key == ord('1') or recording_switch_new_position == 0) and flt_ctrl.program_id == 1:
-            flt_ctrl.select_program(0)
+        elif (key == ord('1') or recording_switch_new_position == 0):
+            flt_ctrl.select_program(3)
         # level flight
         elif (key == ord('2') or autopilot_switch_new_position == 1) and flt_ctrl.program_id != 2:
             flt_ctrl.select_program(2)
@@ -485,8 +515,8 @@ def main():
         
         # Simulation: read the values of ServoHandlerSimulator objects
         if ail_handler.__class__.__name__ == 'ServoHandlerSimulator':
-            ail_handler.update(ail_stick_value)
-            elev_handler.update(elev_stick_value)
+            ail_handler.update(ail_stick_val)
+            elev_handler.update(elev_stick_val)
         
         # increment the frame count
         n += 1

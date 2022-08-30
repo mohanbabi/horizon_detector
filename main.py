@@ -21,7 +21,7 @@ from disable_wifi_and_bluetooth import disable_wifi_and_bluetooth
 from flight_controller import FlightController
 
 def main():
-    print('----------STARTING HORIZON DETECTOR----------')
+    print('----------STARTING HORIZON DETECTOR----------')    
     # parse arguments
     parser = ArgumentParser()
     help_text = 'The path to the video. For webcam, enter the index of the webcam you want to use, e.g. 0 '
@@ -46,7 +46,7 @@ def main():
     FPS = args.fps
     # percentage of the image height that is considered an acceptable variance,
     # for the find_horizon function
-    ACCEPTABLE_VARIANCE = 1.3 
+    ACCEPTABLE_VARIANCE = 2
     OPERATING_SYSTEM = platform.system()
 
     # Validate INFERENCE_RESOLUTION
@@ -76,7 +76,6 @@ def main():
     # global variables
     actual_fps = 0
     horizon_detection = True
-    autopilot = False
     if OPERATING_SYSTEM == 'Linux':
         render_image = False
     else:
@@ -88,10 +87,11 @@ def main():
         choose where to write the video output and detection data
         """
         # check if there is a thumbdrive that can be used
-        supported_thumbdrives = ['Cruzer', 'SAMSUNG USB', '329A-3084']
+        supported_thumbdrives = ['Cruzer', 'SAMSUNG USB', '329A-3084', 'scratch']
         for i in supported_thumbdrives:
             file_path = f'/media/pi/{i}'
             if os.path.exists(file_path):
+                file_path += '/recordings'
                 break
         else:
             file_path = 'recordings'
@@ -106,19 +106,6 @@ def main():
         """
         Finishes up the recording and saves the diagnostic data file.
         """
-        # count the number of high confidence horizons
-        high_conf_horizons = 0
-        for value in datadict['frames'].values():
-            if value['is_good_horizon'] == 1:
-                high_conf_horizons += 1
-
-        # record the actual FPS
-        actual_fps_lst = []
-        for value in datadict['frames'].values():
-            actual_fps_lst.append(value['actual_fps'])
-        average_actual_fps = np.average(actual_fps_lst)
-        print(f'average_actual_fps: {average_actual_fps}')
-
         # pack up values into dictionary
         metadata['datetime'] = dt_string
         metadata['resolution'] = RESOLUTION_STR
@@ -153,18 +140,20 @@ def main():
 
     # get some parameters for cropping and scaling
     crop_and_scale_parameters = get_cropping_and_scaling_parameters(video_capture.resolution, INFERENCE_RESOLUTION)
-    
-    # Define the exclusion threshold in terms of the height of INFERENCE_RESOLUTION.
-    # EXCLUSION_THRESH is the distance from the previous horizon beyond which  
-    # contour points will be filtered out.
-    EXCLUSION_THRESH = 10
-
-    # define the HorizonDetector
-    horizon_detector = HorizonDetector(EXCLUSION_THRESH, FOV, ACCEPTABLE_VARIANCE)
 
     # start VideoStreamer
     video_capture.start_stream()
     sleep(1)
+
+    # Define the exclusion threshold in terms of the height of INFERENCE_RESOLUTION.
+    # EXCLUSION_THRESH is the distance from the previous horizon beyond which  
+    # contour points will be filtered out.
+    EXCLUSION_THRESH = 6
+
+    # define the HorizonDetector
+    frame = video_capture.read_frame()
+    scaled_and_cropped_frame = crop_and_scale(frame, **crop_and_scale_parameters)
+    horizon_detector = HorizonDetector(EXCLUSION_THRESH, FOV, ACCEPTABLE_VARIANCE, scaled_and_cropped_frame.shape[0])
     
     # perform some start-up operations specific to the Raspberry Pi
     if OPERATING_SYSTEM == "Linux":
@@ -179,12 +168,15 @@ def main():
         autopilot_switch = TransmitterSwitch(6, 2)
             
         # servo handlers
-        ail_handler = ServoHandler(13, 12, FPS, .1, 30)
-        elev_handler = ServoHandler(18, 27, FPS, .1, 30)
+        ail_handler = ServoHandler(13, 12, FPS) # , .1, 30)
+        elev_handler = ServoHandler(18, 27, FPS) # , .1, 30)
         
         # flight controller
         flt_ctrl = FlightController(ail_handler, elev_handler, FPS)
-    
+          
+    else:
+        ail_stick_val, elev_stick_val, ail_val, elev_val, flt_mode = None, None, None, None, None
+          
     # initialize variables for main loop
     t1 = timer() # for measuring frame rate
     n = 0 # frame number
@@ -199,9 +191,11 @@ def main():
             # find the horizon
             output = horizon_detector.find_horizon(scaled_and_cropped_frame, diagnostic_mode=render_image)
             roll, pitch, variance, is_good_horizon, diagnostic_mask = output
-            
+
         # run the flight controller
-        ail_val, elev_val = flt_ctrl.run(roll, pitch, is_good_horizon) 
+        if OPERATING_SYSTEM == "Linux":
+            ail_stick_val, elev_stick_val, ail_val, elev_val = flt_ctrl.run(roll, pitch, is_good_horizon)
+            flt_mode = flt_ctrl.program_id  
 
         # save the horizon data for diagnostic purposes
         if horizon_detection and gv.recording:
@@ -217,7 +211,9 @@ def main():
             frame_data['actual_fps'] = actual_fps
             frame_data['ail_val'] = ail_val
             frame_data['elev_val'] = elev_val
-            frame_data['flt_mode'] = flt_ctrl.program_id  
+            frame_data['ail_stick_val'] = ail_stick_val
+            frame_data['elev_stick_val'] = elev_stick_val
+            frame_data['flt_mode'] = flt_mode 
             frames[recording_frame_num] = frame_data
          
         if render_image:
@@ -304,8 +300,7 @@ def main():
             
             # do a surface check
             if OPERATING_SYSTEM == 'Linux':
-                flt_ctrl.select_program(1
-                                        )
+                flt_ctrl.select_program(1)
                 
         elif (key == ord('r') or recording_switch_new_position == 0) and gv.recording:
             # toggle the recording flag
@@ -314,6 +309,10 @@ def main():
             # finish the recording, save diagnostic about recording
             if horizon_detection:
                 finish_recording()
+            
+            # wiggle servos to confirm completion of recording
+            if OPERATING_SYSTEM == 'Linux':
+                flt_ctrl.select_program(3)
 
         # DYNAMIC WAIT
         # Figure out how much longer we need to wait in order 

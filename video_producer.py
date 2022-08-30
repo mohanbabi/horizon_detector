@@ -92,7 +92,9 @@ def main(mode=1, output_res=(1280,720)):
         crop_and_scale_parameters = get_cropping_and_scaling_parameters(resolution, inf_resolution)
 
         # define the HorizonDetector
-        horizon_detector = HorizonDetector(exclusion_thresh, fov, acceptable_variance)
+        ret, frame = cap.read()
+        horizon_detector = HorizonDetector(exclusion_thresh, fov, acceptable_variance, frame.shape[0])
+        cap = cv2.VideoCapture(source)
 
         frame_num = 0
         while True:
